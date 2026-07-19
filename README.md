@@ -233,6 +233,10 @@ Greet me warmly in one sentence, in character, and vary the wording each time.
 ```
 If `greeting.txt` is missing, the app uses the built-in default greeting prompt.
 
+**Wake word:**
+
+After the startup greeting, the app listens for the on-device wake word "hey jarvis" (via [openWakeWord](https://github.com/dscripka/openWakeWord)) before forwarding any microphone audio to the backend. Once woken, it converses normally; after 60 seconds of conversation inactivity the wake word gate re-arms.
+
 **Enabling tools:**
 
 List enabled tools in `tools.txt`, one per line. Prefix with `#` to comment out:
