@@ -120,6 +120,44 @@ def test_no_rearm_while_conversation_active(stub_model: type[_StubModel], fake_c
     assert len(stub_model.instances) == 1
 
 
+def test_manual_arm_regates_and_rebuilds_model(stub_model: type[_StubModel]) -> None:
+    """arm() closes an awake gate immediately and swaps in a fresh model."""
+    gate = WakeWordGate()
+    stub_model.score = 0.9
+    gate.allows(_frame(CHUNK_SAMPLES), 0.0, True)
+    stub_model.score = 0.0
+    assert gate.is_awake is True
+
+    gate.arm()
+
+    assert gate.is_awake is False
+    assert len(stub_model.instances) == 2
+    assert gate.allows(_frame(CHUNK_SAMPLES), 0.0, True) is False
+
+
+def test_manual_arm_is_noop_while_already_armed(stub_model: type[_StubModel]) -> None:
+    """arm() on an armed gate must not rebuild the model."""
+    gate = WakeWordGate()
+
+    gate.arm()
+
+    assert gate.is_awake is False
+    assert len(stub_model.instances) == 1
+
+
+def test_rearm_timeout_change_applies_immediately(stub_model: type[_StubModel], fake_clock: SimpleNamespace) -> None:
+    """Shrinking rearm_seconds at runtime re-arms an already-awake gate sooner."""
+    gate = WakeWordGate(rearm_seconds=REARM_SECONDS)
+    stub_model.score = 0.9
+    gate.allows(_frame(CHUNK_SAMPLES), 0.0, True)
+    stub_model.score = 0.0
+
+    gate.rearm_seconds = 10.0
+    fake_clock.now += 11.0
+    assert gate.allows(_frame(CHUNK_SAMPLES), 11.0, True) is False
+    assert gate.is_awake is False
+
+
 def test_real_model_scores_silence_below_threshold() -> None:
     """Smoke test against the real bundled model: silence must not wake the gate."""
     gate = WakeWordGate()

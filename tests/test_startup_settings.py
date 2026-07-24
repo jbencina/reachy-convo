@@ -15,6 +15,29 @@ def test_write_and_read_startup_settings(tmp_path) -> None:
     assert read_startup_settings(tmp_path) == StartupSettings(profile="sorry_bro", voice="shimmer")
 
 
+def test_wake_word_timeout_round_trips(tmp_path) -> None:
+    """The wake word timeout persists alongside profile and voice."""
+    write_startup_settings(tmp_path, profile="sorry_bro", voice="shimmer", wake_word_timeout=120.0)
+
+    assert read_startup_settings(tmp_path) == StartupSettings(
+        profile="sorry_bro", voice="shimmer", wake_word_timeout=120.0
+    )
+
+
+def test_wake_word_timeout_persists_without_profile_or_voice(tmp_path) -> None:
+    """A timeout alone is enough to keep the settings file around."""
+    write_startup_settings(tmp_path, profile=None, voice=None, wake_word_timeout=90.0)
+
+    assert read_startup_settings(tmp_path) == StartupSettings(wake_word_timeout=90.0)
+
+
+def test_invalid_wake_word_timeout_is_dropped(tmp_path) -> None:
+    """Zero/negative/non-numeric timeouts are treated as unset."""
+    write_startup_settings(tmp_path, profile="sorry_bro", voice=None, wake_word_timeout=-5)
+
+    assert read_startup_settings(tmp_path).wake_word_timeout is None
+
+
 def test_load_startup_settings_into_runtime_applies_profile_when_no_env(monkeypatch, tmp_path) -> None:
     """Startup settings should seed the runtime profile when no explicit env override exists."""
     write_startup_settings(tmp_path, profile="sorry_bro", voice="shimmer")
