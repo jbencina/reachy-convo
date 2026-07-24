@@ -183,6 +183,17 @@ reachy-mini-conversation-app --no-camera
 reachy-mini-conversation-app --ui
 ```
 
+### Deploying to the robot
+
+To install a local checkout on a wireless Reachy Mini over the local network:
+
+```bash
+scripts/deploy_to_robot.sh              # defaults to pollen@reachy-mini.local
+scripts/deploy_to_robot.sh 192.168.1.42 # or pass a host/IP
+```
+
+The script builds the wheel with `uv build`, copies it over `scp`, and installs it into the robot's shared app venv (`/venvs/apps_venv`). The default SSH password is `root`; run `ssh-copy-id pollen@reachy-mini.local` once to skip password prompts. Afterwards, restart the app from the dashboard (`http://reachy-mini.local:8000`) for the new code to take effect — the script prints the exact commands.
+
 ## LLM tools exposed to the assistant
 
 The default profile exposes these tools. Custom profiles can enable a different set in their own `tools.txt`.
