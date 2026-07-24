@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 CHUNK_SAMPLES = 1280  # 80 ms at openwakeword's required 16 kHz rate
 DETECTION_THRESHOLD = 0.5
+PHRASE_TAIL_SECONDS = 0.5  # the score crosses the threshold while "jarvis" is still sounding
 REARM_SECONDS = 60.0
 
 
@@ -34,7 +35,10 @@ class WakeWordGate:
     def allows(self, audio_frame: NDArray[np.float32], idle_seconds: float, conversation_idle: bool) -> bool:
         """Return True when mic audio may reach the backend; run detection while gated."""
         if self._awake_at is not None:
-            if min(idle_seconds, time.monotonic() - self._awake_at) <= REARM_SECONDS or not conversation_idle:
+            awake_seconds = time.monotonic() - self._awake_at
+            if awake_seconds < PHRASE_TAIL_SECONDS:
+                return False  # drop the rest of the wake phrase so the backend never hears it
+            if min(idle_seconds, awake_seconds) <= REARM_SECONDS or not conversation_idle:
                 return True
             self._awake_at = None
             # Model.reset() keeps ~10 s of feature history, so rebuild for a clean armed state.
