@@ -237,6 +237,17 @@ If `greeting.txt` is missing, the app uses the built-in default greeting prompt.
 
 After the startup greeting, the app listens for the on-device wake word "hey jarvis" (via [openWakeWord](https://github.com/dscripka/openWakeWord)) before forwarding any microphone audio to the backend. Once woken, it converses normally; after 60 seconds of conversation inactivity the wake word gate re-arms.
 
+How it works:
+
+- While the gate is armed, no audio leaves the robot. Mic frames are scored locally by the bundled `hey_jarvis` model; frames are only streamed to the realtime backend after a detection. Detection is fully on-device, so nothing is sent anywhere until you speak the wake word.
+- The "hey jarvis" utterance itself is not forwarded — streaming starts with the audio that follows it, so the backend never hears (or answers) the wake phrase.
+- Once awake, the detector stops running entirely, so conversation latency is unaffected.
+- The gate re-arms after 60 seconds without conversation activity, but never while the robot is still speaking or moving. Saying the wake word always grants a full 60-second window, even if you pause before speaking.
+- On re-arm, the detector model is rebuilt from scratch: openWakeWord's `reset()` retains ~10 s of audio feature history, which could otherwise cause a stale trigger.
+- The mic must run at 16 kHz (openWakeWord's required rate); the app logs a warning at startup if it does not, since detection would silently fail.
+
+Implementation lives in `src/reachy_mini_conversation_app/wake_word.py` (`WakeWordGate`), hooked into the mic loop in `console.py`. The dependency is pinned to `openwakeword>=0.4.0,<0.5` because 0.4.x bundles the `hey_jarvis` ONNX model, while 0.5+ requires `tflite-runtime`.
+
 **Enabling tools:**
 
 List enabled tools in `tools.txt`, one per line. Prefix with `#` to comment out:
