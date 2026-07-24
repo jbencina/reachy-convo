@@ -143,7 +143,6 @@ export const deletePersonality = (name) => rpcCall("personalities.delete", { nam
 export const getMicState = () => rpcCall("conversation.mic", {});
 export const setMicMuted = (muted) => rpcCall("conversation.mic", { muted });
 
-export const getWakeWord = () => rpcCall("conversation.wakeword", {});
 export const armWakeWord = () => rpcCall("conversation.wakeword", { arm: true });
 export const setWakeWordTimeout = (timeoutSeconds) =>
   rpcCall("conversation.wakeword", { timeout_seconds: timeoutSeconds });

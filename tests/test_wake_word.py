@@ -120,7 +120,7 @@ def test_no_rearm_while_conversation_active(stub_model: type[_StubModel], fake_c
     assert len(stub_model.instances) == 1
 
 
-def test_manual_arm_regates_and_rebuilds_model(stub_model: type[_StubModel], fake_clock: SimpleNamespace) -> None:
+def test_manual_arm_regates_and_rebuilds_model(stub_model: type[_StubModel]) -> None:
     """arm() closes an awake gate immediately and swaps in a fresh model."""
     gate = WakeWordGate()
     stub_model.score = 0.9

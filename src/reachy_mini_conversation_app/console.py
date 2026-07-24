@@ -37,8 +37,7 @@ from reachy_mini_conversation_app.config import (
     refresh_runtime_config_from_env,
 )
 from reachy_mini_conversation_app.streaming import AdditionalOutputs, audio_to_float32
-from reachy_mini_conversation_app.wake_word import REARM_SECONDS as WAKE_REARM_SECONDS
-from reachy_mini_conversation_app.wake_word import WakeWordGate
+from reachy_mini_conversation_app.wake_word import REARM_SECONDS, WakeWordGate
 from reachy_mini_conversation_app.startup_settings import read_startup_settings, write_startup_settings
 from reachy_mini_conversation_app.tools.core_tools import initialize_tools
 from reachy_mini_conversation_app.personality_routes import (
@@ -131,7 +130,7 @@ class LocalStream:
         self._wake_gate: WakeWordGate | None = None  # built in record_loop to keep construction cheap
         # Cross-thread handoff: /rpc requests re-arming, record_loop performs it.
         self._wake_arm_requested = False
-        self._wake_timeout = read_startup_settings(instance_path).wake_word_timeout or WAKE_REARM_SECONDS
+        self._wake_timeout = read_startup_settings(instance_path).wake_word_timeout or REARM_SECONDS
         self._backend_connection_state = "not_started"
         self._backend_error: str | None = None
         self._backend_retry_delay = BACKEND_RETRY_DELAY_SECONDS

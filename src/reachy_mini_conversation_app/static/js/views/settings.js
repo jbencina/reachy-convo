@@ -242,6 +242,7 @@ function buildWakeWordSection() {
     max: "3600",
     step: "1",
     inputmode: "numeric",
+    required: "required",
     class: "settings-input",
   });
   const status = h("p", { class: "settings-status", role: "status", "aria-live": "polite" });
@@ -298,11 +299,9 @@ function buildWakeWordSection() {
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     status.classList.remove("is-error");
-    const timeout = Number.parseInt(timeoutInput.value, 10);
-    if (!Number.isFinite(timeout)) return;
     status.textContent = "Saving…";
     try {
-      const result = await setWakeWordTimeout(timeout);
+      const result = await setWakeWordTimeout(Number.parseInt(timeoutInput.value, 10));
       render(result);
       status.textContent = "Timeout saved.";
     } catch (error) {

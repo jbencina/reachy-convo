@@ -16,6 +16,8 @@ from reachy_mini_conversation_app.config import HF_AVAILABLE_VOICES, config
 from reachy_mini_conversation_app.console import LocalStream
 from reachy_mini_conversation_app.startup_settings import (
     StartupSettings,
+    read_startup_settings,
+    write_startup_settings,
     load_startup_settings_into_runtime,
 )
 from reachy_mini_conversation_app.personality_routes import (
@@ -844,7 +846,7 @@ class _FakeWakeGate:
 def _record_loop_stream(monkeypatch: pytest.MonkeyPatch) -> tuple[LocalStream, _FakeWakeGate, MagicMock]:
     fake_gate = _FakeWakeGate()
 
-    def _fake_gate_factory(rearm_seconds: float = 60.0) -> _FakeWakeGate:
+    def _fake_gate_factory(rearm_seconds: float) -> _FakeWakeGate:
         fake_gate.rearm_seconds = rearm_seconds
         return fake_gate
 
@@ -935,21 +937,24 @@ async def test_record_loop_consumes_manual_arm_request(monkeypatch: pytest.Monke
 
 
 @pytest.mark.asyncio
-async def test_record_loop_builds_gate_with_persisted_timeout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """The gate starts with the timeout saved in startup settings."""
-    from reachy_mini_conversation_app.startup_settings import write_startup_settings
+async def test_record_loop_builds_gate_with_configured_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The gate is constructed with the stream's configured timeout."""
+    stream, fake_gate, _handler = _record_loop_stream(monkeypatch)
+    stream._wake_timeout = 120.0
+    stream._stop_event.set()  # gate is built before the loop body runs
 
-    write_startup_settings(tmp_path, profile=None, voice=None, wake_word_timeout=120.0)
-    stream, fake_gate, handler = _record_loop_stream(monkeypatch)
-    stream._instance_path = str(tmp_path)
-    stream._wake_timeout = 120.0  # normally read in __init__ from instance_path
-
-    loop_task = asyncio.create_task(stream.record_loop())
-    await _wait_until(lambda: fake_gate.calls >= 1)
-    stream._stop_event.set()
-    await loop_task
+    await stream.record_loop()
 
     assert fake_gate.rearm_seconds == 120.0
+
+
+def test_init_reads_persisted_wake_timeout(tmp_path: Path) -> None:
+    """A persisted wake word timeout seeds the stream at construction."""
+    write_startup_settings(tmp_path, profile=None, voice=None, wake_word_timeout=120.0)
+
+    stream = LocalStream(MagicMock(), _rpc_robot(), instance_path=str(tmp_path))
+
+    assert stream._wake_timeout == 120.0
 
 
 def test_rpc_wakeword_reports_default_state() -> None:
@@ -965,8 +970,6 @@ def test_rpc_wakeword_reports_default_state() -> None:
 
 def test_rpc_wakeword_sets_timeout_and_persists(tmp_path: Path) -> None:
     """Setting the timeout updates the live gate and startup settings."""
-    from reachy_mini_conversation_app.startup_settings import read_startup_settings
-
     app = FastAPI()
     stream = LocalStream(MagicMock(), _rpc_robot(), settings_app=app, instance_path=str(tmp_path))
     stream._init_settings_ui_if_needed()
@@ -980,10 +983,10 @@ def test_rpc_wakeword_sets_timeout_and_persists(tmp_path: Path) -> None:
     assert read_startup_settings(tmp_path).wake_word_timeout == 120.0
 
 
-def test_rpc_wakeword_rejects_out_of_range_timeout(tmp_path: Path) -> None:
+def test_rpc_wakeword_rejects_out_of_range_timeout() -> None:
     """Timeouts outside 5-3600 s (or non-numeric) are rejected."""
     app = FastAPI()
-    stream = LocalStream(MagicMock(), _rpc_robot(), settings_app=app, instance_path=str(tmp_path))
+    stream = LocalStream(MagicMock(), _rpc_robot(), settings_app=app)
     stream._init_settings_ui_if_needed()
 
     for bad in (2, 10_000, "soon", True):
