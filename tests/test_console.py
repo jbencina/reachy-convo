@@ -825,6 +825,16 @@ class _FakeWakeGate:
     def __init__(self) -> None:
         self.open = False
         self.calls = 0
+        self.arm_calls = 0
+        self.rearm_seconds = 60.0
+
+    @property
+    def is_awake(self) -> bool:
+        return self.open
+
+    def arm(self) -> None:
+        self.arm_calls += 1
+        self.open = False
 
     def allows(self, audio_frame: Any, idle_seconds: float, conversation_idle: bool) -> bool:
         self.calls += 1
@@ -833,7 +843,12 @@ class _FakeWakeGate:
 
 def _record_loop_stream(monkeypatch: pytest.MonkeyPatch) -> tuple[LocalStream, _FakeWakeGate, MagicMock]:
     fake_gate = _FakeWakeGate()
-    monkeypatch.setattr("reachy_mini_conversation_app.console.WakeWordGate", lambda: fake_gate)
+
+    def _fake_gate_factory(rearm_seconds: float = 60.0) -> _FakeWakeGate:
+        fake_gate.rearm_seconds = rearm_seconds
+        return fake_gate
+
+    monkeypatch.setattr("reachy_mini_conversation_app.console.WakeWordGate", _fake_gate_factory)
     handler = MagicMock()
     handler.receive = AsyncMock()
     media = SimpleNamespace(
@@ -901,3 +916,93 @@ async def test_record_loop_mute_wins_over_wake_gate(monkeypatch: pytest.MonkeyPa
 
     assert fake_gate.calls == 0
     handler.receive.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_record_loop_consumes_manual_arm_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A pending re-arm request is applied by the record loop, then cleared."""
+    stream, fake_gate, handler = _record_loop_stream(monkeypatch)
+    fake_gate.open = True
+    stream._wake_arm_requested = True
+
+    loop_task = asyncio.create_task(stream.record_loop())
+    await _wait_until(lambda: fake_gate.arm_calls >= 1)
+    stream._stop_event.set()
+    await loop_task
+
+    assert stream._wake_arm_requested is False
+    handler.receive.assert_not_awaited()  # gate closed by arm() before any frame passed
+
+
+@pytest.mark.asyncio
+async def test_record_loop_builds_gate_with_persisted_timeout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The gate starts with the timeout saved in startup settings."""
+    from reachy_mini_conversation_app.startup_settings import write_startup_settings
+
+    write_startup_settings(tmp_path, profile=None, voice=None, wake_word_timeout=120.0)
+    stream, fake_gate, handler = _record_loop_stream(monkeypatch)
+    stream._instance_path = str(tmp_path)
+    stream._wake_timeout = 120.0  # normally read in __init__ from instance_path
+
+    loop_task = asyncio.create_task(stream.record_loop())
+    await _wait_until(lambda: fake_gate.calls >= 1)
+    stream._stop_event.set()
+    await loop_task
+
+    assert fake_gate.rearm_seconds == 120.0
+
+
+def test_rpc_wakeword_reports_default_state() -> None:
+    """Before the gate exists, the RPC reports armed with the default timeout."""
+    app = FastAPI()
+    stream = LocalStream(MagicMock(), _rpc_robot(), settings_app=app)
+    stream._init_settings_ui_if_needed()
+
+    result = _rpc_call(app, "conversation.wakeword")["result"]
+
+    assert result == {"awake": False, "timeout_seconds": 60.0}
+
+
+def test_rpc_wakeword_sets_timeout_and_persists(tmp_path: Path) -> None:
+    """Setting the timeout updates the live gate and startup settings."""
+    from reachy_mini_conversation_app.startup_settings import read_startup_settings
+
+    app = FastAPI()
+    stream = LocalStream(MagicMock(), _rpc_robot(), settings_app=app, instance_path=str(tmp_path))
+    stream._init_settings_ui_if_needed()
+    gate = _FakeWakeGate()
+    stream._wake_gate = gate  # type: ignore[assignment]
+
+    result = _rpc_call(app, "conversation.wakeword", {"timeout_seconds": 120})["result"]
+
+    assert result["timeout_seconds"] == 120.0
+    assert gate.rearm_seconds == 120.0
+    assert read_startup_settings(tmp_path).wake_word_timeout == 120.0
+
+
+def test_rpc_wakeword_rejects_out_of_range_timeout(tmp_path: Path) -> None:
+    """Timeouts outside 5-3600 s (or non-numeric) are rejected."""
+    app = FastAPI()
+    stream = LocalStream(MagicMock(), _rpc_robot(), settings_app=app, instance_path=str(tmp_path))
+    stream._init_settings_ui_if_needed()
+
+    for bad in (2, 10_000, "soon", True):
+        resp = _rpc_call(app, "conversation.wakeword", {"timeout_seconds": bad})
+        assert resp["error"]["data"]["reason"] == "invalid_timeout"
+    assert stream._wake_timeout == 60.0
+
+
+def test_rpc_wakeword_arm_requests_flag_for_record_loop() -> None:
+    """{'arm': true} hands off to record_loop and reports the gate as armed."""
+    app = FastAPI()
+    stream = LocalStream(MagicMock(), _rpc_robot(), settings_app=app)
+    stream._init_settings_ui_if_needed()
+    gate = _FakeWakeGate()
+    gate.open = True
+    stream._wake_gate = gate  # type: ignore[assignment]
+
+    result = _rpc_call(app, "conversation.wakeword", {"arm": True})["result"]
+
+    assert stream._wake_arm_requested is True
+    assert result["awake"] is False  # reported armed even before record_loop consumes the flag
+    assert gate.arm_calls == 0  # RPC thread must not touch the gate directly

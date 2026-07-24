@@ -15,10 +15,11 @@ STARTUP_SETTINGS_FILENAME = "startup_settings.json"
 
 @dataclass(frozen=True)
 class StartupSettings:
-    """Instance-local startup profile/voice settings selected from the UI."""
+    """Instance-local startup profile/voice/wake-word settings selected from the UI."""
 
     profile: str | None = None
     voice: str | None = None
+    wake_word_timeout: float | None = None
 
 
 def _normalize_optional_text(value: object) -> str | None:
@@ -27,6 +28,14 @@ def _normalize_optional_text(value: object) -> str | None:
         return None
     normalized = value.strip()
     return normalized or None
+
+
+def _normalize_optional_seconds(value: object) -> float | None:
+    """Return a positive duration in seconds, or None for anything else."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    seconds = float(value)
+    return seconds if seconds > 0 else None
 
 
 def _startup_settings_path(instance_path: str | Path | None) -> Path | None:
@@ -55,6 +64,7 @@ def read_startup_settings(instance_path: str | Path | None) -> StartupSettings:
     return StartupSettings(
         profile=_normalize_optional_text(payload.get("profile")),
         voice=_normalize_optional_text(payload.get("voice")),
+        wake_word_timeout=_normalize_optional_seconds(payload.get("wake_word_timeout")),
     )
 
 
@@ -63,6 +73,7 @@ def write_startup_settings(
     *,
     profile: str | None,
     voice: str | None,
+    wake_word_timeout: float | None = None,
 ) -> None:
     """Persist startup settings in an instance-local JSON file."""
     settings_path = _startup_settings_path(instance_path)
@@ -72,19 +83,22 @@ def write_startup_settings(
     settings = StartupSettings(
         profile=_normalize_optional_text(profile),
         voice=_normalize_optional_text(voice),
+        wake_word_timeout=_normalize_optional_seconds(wake_word_timeout),
     )
-    if settings.profile is None and settings.voice is None:
+    if settings.profile is None and settings.voice is None and settings.wake_word_timeout is None:
         try:
             settings_path.unlink()
         except FileNotFoundError:
             return
         return
 
-    payload: dict[str, str] = {}
+    payload: dict[str, str | float] = {}
     if settings.profile is not None:
         payload["profile"] = settings.profile
     if settings.voice is not None:
         payload["voice"] = settings.voice
+    if settings.wake_word_timeout is not None:
+        payload["wake_word_timeout"] = settings.wake_word_timeout
 
     settings_path.write_text(f"{json.dumps(payload, indent=2, sort_keys=True)}\n", encoding="utf-8")
 

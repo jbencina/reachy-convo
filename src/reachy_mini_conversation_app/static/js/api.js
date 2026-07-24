@@ -143,6 +143,11 @@ export const deletePersonality = (name) => rpcCall("personalities.delete", { nam
 export const getMicState = () => rpcCall("conversation.mic", {});
 export const setMicMuted = (muted) => rpcCall("conversation.mic", { muted });
 
+export const getWakeWord = () => rpcCall("conversation.wakeword", {});
+export const armWakeWord = () => rpcCall("conversation.wakeword", { arm: true });
+export const setWakeWordTimeout = (timeoutSeconds) =>
+  rpcCall("conversation.wakeword", { timeout_seconds: timeoutSeconds });
+
 export const listVoices = () => rpcCall("voices.list");
 export const getCurrentVoice = () => rpcCall("voices.current");
 export const applyVoice = (voice) => rpcCall("voices.apply", { voice });
@@ -164,6 +169,7 @@ const ERROR_MESSAGES = Object.freeze({
   profile_in_use: "This personality is active or set to load at startup. Switch to another one first.",
   not_deletable: "This personality can't be deleted.",
   loop_unavailable: "Reachy is still starting up. Try again in a moment.",
+  invalid_timeout: "The wake word timeout must be between 5 and 3600 seconds.",
 });
 
 /** Map a thrown error to user-facing copy, falling back to its raw message. */

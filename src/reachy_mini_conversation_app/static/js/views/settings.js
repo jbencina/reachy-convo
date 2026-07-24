@@ -2,11 +2,13 @@
 
 import {
   applyVoice,
+  armWakeWord,
   describeError,
   getCurrentVoice,
   getStatus,
   listVoices,
   saveBackendConfig,
+  setWakeWordTimeout,
   untilReady,
 } from "../api.js";
 import { h } from "../ui.js";
@@ -28,11 +30,12 @@ export async function mountSettingsView({ outlet, signal }) {
   const connectionSection = buildConnectionSection({
     onSaved: () =>
       Promise.all([
-        refreshStatus({ statusSection, connectionSection, signal }),
+        refreshStatus({ statusSection, connectionSection, wakeWordSection, signal }),
         refreshVoices({ voiceSection, signal }),
       ]),
   });
   const voiceSection = buildVoiceSection();
+  const wakeWordSection = buildWakeWordSection();
   const statusSection = buildStatusSection();
 
   const view = h(
@@ -46,12 +49,13 @@ export async function mountSettingsView({ outlet, signal }) {
     ),
     connectionSection.element,
     voiceSection.element,
+    wakeWordSection.element,
     statusSection.element
   );
   outlet.replaceChildren(view);
 
   await Promise.all([
-    refreshStatus({ statusSection, connectionSection, signal }),
+    refreshStatus({ statusSection, connectionSection, wakeWordSection, signal }),
     refreshVoices({ voiceSection, signal }),
   ]);
 }
@@ -228,6 +232,93 @@ function buildVoiceSection() {
   };
 }
 
+function buildWakeWordSection() {
+  const stateLine = h("p", { class: "settings-hint" }, "");
+  const armButton = h("button", { type: "button", class: "btn" }, "Re-arm now");
+  const timeoutInput = h("input", {
+    type: "number",
+    name: "wake_timeout",
+    min: "5",
+    max: "3600",
+    step: "1",
+    inputmode: "numeric",
+    class: "settings-input",
+  });
+  const status = h("p", { class: "settings-status", role: "status", "aria-live": "polite" });
+
+  const form = h(
+    "form",
+    { class: "settings-form" },
+    stateLine,
+    h(
+      "label",
+      { class: "settings-field" },
+      h("span", { class: "settings-label" }, "Re-arm timeout (seconds)"),
+      timeoutInput
+    ),
+    h(
+      "div",
+      { class: "settings-actions" },
+      h("button", { type: "submit", class: "btn btn--primary" }, "Save timeout"),
+      armButton
+    ),
+    status
+  );
+
+  const element = h(
+    "section",
+    { class: "settings-section" },
+    h("h2", { class: "settings-section-title" }, "Wake word"),
+    form
+  );
+
+  function render(payload) {
+    if (!payload) return;
+    stateLine.textContent = payload.awake
+      ? "Awake: streaming mic audio to the backend."
+      : 'Armed: waiting for "hey jarvis".';
+    if (payload.timeout_seconds != null && document.activeElement !== timeoutInput) {
+      timeoutInput.value = String(Math.round(payload.timeout_seconds));
+    }
+  }
+
+  armButton.addEventListener("click", async () => {
+    status.classList.remove("is-error");
+    status.textContent = "Re-arming…";
+    try {
+      const result = await armWakeWord();
+      render(result);
+      status.textContent = 'Re-armed. Say "hey jarvis" to wake Reachy.';
+    } catch (error) {
+      status.textContent = `Failed to re-arm: ${describeError(error)}`;
+      status.classList.add("is-error");
+    }
+  });
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    status.classList.remove("is-error");
+    const timeout = Number.parseInt(timeoutInput.value, 10);
+    if (!Number.isFinite(timeout)) return;
+    status.textContent = "Saving…";
+    try {
+      const result = await setWakeWordTimeout(timeout);
+      render(result);
+      status.textContent = "Timeout saved.";
+    } catch (error) {
+      status.textContent = `Failed to save: ${describeError(error)}`;
+      status.classList.add("is-error");
+    }
+  });
+
+  return {
+    element,
+    syncFromStatus(payload) {
+      render(payload?.wake_word);
+    },
+  };
+}
+
 function buildStatusSection() {
   const list = h("dl", { class: "settings-status-grid" });
   const element = h(
@@ -277,12 +368,13 @@ function formatHfTarget(payload) {
   return `${host}:${port || DEFAULT_HF_PORT}`;
 }
 
-async function refreshStatus({ statusSection, connectionSection, signal }) {
+async function refreshStatus({ statusSection, connectionSection, wakeWordSection, signal }) {
   try {
     const payload = await untilReady(getStatus, signal);
     if (signal.aborted) return;
     statusSection.render(payload);
     connectionSection.syncFromStatus(payload);
+    wakeWordSection.syncFromStatus(payload);
   } catch {
     // Status panel just stays empty; not critical for the rest of the UI.
   }

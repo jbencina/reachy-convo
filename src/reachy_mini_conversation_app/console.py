@@ -37,6 +37,7 @@ from reachy_mini_conversation_app.config import (
     refresh_runtime_config_from_env,
 )
 from reachy_mini_conversation_app.streaming import AdditionalOutputs, audio_to_float32
+from reachy_mini_conversation_app.wake_word import REARM_SECONDS as WAKE_REARM_SECONDS
 from reachy_mini_conversation_app.wake_word import WakeWordGate
 from reachy_mini_conversation_app.startup_settings import read_startup_settings, write_startup_settings
 from reachy_mini_conversation_app.tools.core_tools import initialize_tools
@@ -93,6 +94,8 @@ LEGACY_STARTUP_ENV_NAMES = (
     "REACHY_MINI_VOICE_OVERRIDE",
 )
 BACKEND_RETRY_DELAY_SECONDS = 5.0
+WAKE_TIMEOUT_MIN_SECONDS = 5.0
+WAKE_TIMEOUT_MAX_SECONDS = 3600.0
 
 
 class LocalStream:
@@ -126,6 +129,9 @@ class LocalStream:
         self._asyncio_loop = None
         self._mic_muted = False  # mic starts live; the UI toggles it via the settings API
         self._wake_gate: WakeWordGate | None = None  # built in record_loop to keep construction cheap
+        # Cross-thread handoff: /rpc requests re-arming, record_loop performs it.
+        self._wake_arm_requested = False
+        self._wake_timeout = read_startup_settings(instance_path).wake_word_timeout or WAKE_REARM_SECONDS
         self._backend_connection_state = "not_started"
         self._backend_error: str | None = None
         self._backend_retry_delay = BACKEND_RETRY_DELAY_SECONDS
@@ -439,6 +445,7 @@ class LocalStream:
                 self._instance_path,
                 profile=selection,
                 voice=normalized_voice_override,
+                wake_word_timeout=read_startup_settings(self._instance_path).wake_word_timeout,
             )
             self._remove_persisted_env_values(LEGACY_STARTUP_ENV_NAMES)
             logger.info("Persisted startup personality settings to %s", Path(self._instance_path))
@@ -507,13 +514,41 @@ class LocalStream:
             self._persist_voice_override(self._voice_override)
         return status
 
+    def _wake_word_payload(self) -> dict[str, object]:
+        """Report the wake word gate state for /rpc clients."""
+        gate = self._wake_gate
+        return {
+            "awake": gate is not None and gate.is_awake and not self._wake_arm_requested,
+            "timeout_seconds": self._wake_timeout,
+        }
+
+    def _persist_wake_word_timeout(self, timeout: float) -> None:
+        """Persist the wake word timeout, keeping the startup profile and voice."""
+        if not self._instance_path:
+            return
+        try:
+            existing = read_startup_settings(self._instance_path)
+            write_startup_settings(
+                self._instance_path,
+                profile=existing.profile,
+                voice=existing.voice,
+                wake_word_timeout=timeout,
+            )
+        except Exception as e:
+            logger.warning("Failed to persist wake word timeout: %s", e)
+
     def _persist_voice_override(self, voice: str) -> None:
         """Persist the chosen voice as the startup voice, keeping the startup profile."""
         if not self._instance_path:
             return
         try:
             existing = read_startup_settings(self._instance_path)
-            write_startup_settings(self._instance_path, profile=existing.profile, voice=voice)
+            write_startup_settings(
+                self._instance_path,
+                profile=existing.profile,
+                voice=voice,
+                wake_word_timeout=existing.wake_word_timeout,
+            )
         except Exception as e:
             logger.warning("Failed to persist startup voice: %s", e)
 
@@ -561,6 +596,7 @@ class LocalStream:
                 "can_proceed": has_hf_connection,
                 "can_proceed_with_hf": has_hf_connection,
                 "requires_restart": not self._can_rebuild_handler(),
+                "wake_word": self._wake_word_payload(),
                 **backend_connection,
             }
 
@@ -611,6 +647,29 @@ class LocalStream:
                 self._mic_muted = bool(params["muted"])
                 logger.info("Microphone %s via /rpc", "muted" if self._mic_muted else "unmuted")
             return {"muted": self._mic_muted}
+
+        @rpc.method("conversation.wakeword")  # type: ignore[untyped-decorator]
+        def _rpc_wakeword(params: dict[str, object]) -> dict[str, object]:
+            if "timeout_seconds" in params:
+                raw = params["timeout_seconds"]
+                if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+                    raise JsonRpcError("invalid wake word timeout", reason="invalid_timeout", code=-32602)
+                timeout = float(raw)
+                if not WAKE_TIMEOUT_MIN_SECONDS <= timeout <= WAKE_TIMEOUT_MAX_SECONDS:
+                    raise JsonRpcError(
+                        f"wake word timeout must be {WAKE_TIMEOUT_MIN_SECONDS:.0f}-{WAKE_TIMEOUT_MAX_SECONDS:.0f} s",
+                        reason="invalid_timeout",
+                        code=-32602,
+                    )
+                self._wake_timeout = timeout
+                if self._wake_gate is not None:
+                    self._wake_gate.rearm_seconds = timeout  # atomic float write; safe cross-thread
+                self._persist_wake_word_timeout(timeout)
+                logger.info("Wake word timeout set to %.0f s via /rpc", timeout)
+            if params.get("arm"):
+                self._wake_arm_requested = True
+                logger.info("Wake word re-arm requested via /rpc")
+            return self._wake_word_payload()
 
         @rpc.method("backend.config")  # type: ignore[untyped-decorator]
         def _rpc_backend_config(params: dict[str, object]) -> dict[str, object]:
@@ -870,10 +929,14 @@ class LocalStream:
             # A wrong rate would leave the gate permanently closed: detection scores
             # never cross the threshold, so no audio would ever reach the backend.
             raise RuntimeError(f"Wake word model requires 16 kHz mic input, got {input_sample_rate} Hz")
-        self._wake_gate = WakeWordGate()
+        self._wake_gate = WakeWordGate(rearm_seconds=self._wake_timeout)
         logger.info("Say 'hey jarvis' to start the conversation")
 
         while not self._stop_event.is_set():
+            if self._wake_arm_requested:
+                self._wake_gate.arm()
+                self._wake_arm_requested = False
+                logger.info("Wake word gate re-armed manually")
             audio_frame = self._robot.media.get_audio_sample()
             if audio_frame is not None and not self._mic_muted:
                 movement_manager = self.handler.deps.movement_manager
