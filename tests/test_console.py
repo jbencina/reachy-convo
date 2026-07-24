@@ -817,3 +817,87 @@ def test_rpc_personalities_and_voices_methods() -> None:
         r2 = ws.receive_json()
     assert "choices" in r1["result"] and "current" in r1["result"]
     assert isinstance(r2["result"], list)
+
+
+class _FakeWakeGate:
+    """Stands in for WakeWordGate with a switchable open/closed state."""
+
+    def __init__(self) -> None:
+        self.open = False
+        self.calls = 0
+
+    def allows(self, audio_frame: Any, idle_seconds: float, conversation_idle: bool) -> bool:
+        self.calls += 1
+        return self.open
+
+
+def _record_loop_stream(monkeypatch: pytest.MonkeyPatch) -> tuple[LocalStream, _FakeWakeGate, MagicMock]:
+    fake_gate = _FakeWakeGate()
+    monkeypatch.setattr("reachy_mini_conversation_app.console.WakeWordGate", lambda: fake_gate)
+    handler = MagicMock()
+    handler.receive = AsyncMock()
+    media = SimpleNamespace(
+        get_input_audio_samplerate=lambda: 16000,
+        get_audio_sample=MagicMock(return_value=np.zeros(1280, dtype=np.float32)),
+    )
+    stream = LocalStream(handler, SimpleNamespace(media=media))
+    return stream, fake_gate, handler
+
+
+@pytest.mark.asyncio
+async def test_record_loop_rejects_non_16khz_mic(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A mic rate other than 16 kHz must abort startup, not silently break detection."""
+    stream, fake_gate, handler = _record_loop_stream(monkeypatch)
+    stream._robot.media.get_input_audio_samplerate = lambda: 44100
+
+    with pytest.raises(RuntimeError, match="16 kHz"):
+        await stream.record_loop()
+
+    assert fake_gate.calls == 0
+    handler.receive.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_record_loop_withholds_frames_while_gated(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Mic frames must not reach the backend before the wake word is heard."""
+    stream, fake_gate, handler = _record_loop_stream(monkeypatch)
+
+    loop_task = asyncio.create_task(stream.record_loop())
+    await _wait_until(lambda: fake_gate.calls >= 3)
+    stream._stop_event.set()
+    await loop_task
+
+    handler.receive.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_record_loop_forwards_frames_once_gate_open(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Once the gate reports open, frames flow to the handler unchanged."""
+    stream, fake_gate, handler = _record_loop_stream(monkeypatch)
+    fake_gate.open = True
+
+    loop_task = asyncio.create_task(stream.record_loop())
+    await _wait_until(lambda: handler.receive.await_count >= 1)
+    stream._stop_event.set()
+    await loop_task
+
+    sample_rate, audio_frame = handler.receive.await_args.args[0]
+    assert sample_rate == 16000
+    assert audio_frame.dtype == np.float32
+
+
+@pytest.mark.asyncio
+async def test_record_loop_mute_wins_over_wake_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A muted mic neither forwards audio nor feeds the wake word detector."""
+    stream, fake_gate, handler = _record_loop_stream(monkeypatch)
+    fake_gate.open = True
+    stream._mic_muted = True
+    media_mock = stream._robot.media.get_audio_sample
+
+    loop_task = asyncio.create_task(stream.record_loop())
+    await _wait_until(lambda: media_mock.call_count >= 3)
+    stream._stop_event.set()
+    await loop_task
+
+    assert fake_gate.calls == 0
+    handler.receive.assert_not_awaited()

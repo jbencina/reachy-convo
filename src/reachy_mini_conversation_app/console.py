@@ -37,6 +37,7 @@ from reachy_mini_conversation_app.config import (
     refresh_runtime_config_from_env,
 )
 from reachy_mini_conversation_app.streaming import AdditionalOutputs, audio_to_float32
+from reachy_mini_conversation_app.wake_word import WakeWordGate
 from reachy_mini_conversation_app.startup_settings import read_startup_settings, write_startup_settings
 from reachy_mini_conversation_app.tools.core_tools import initialize_tools
 from reachy_mini_conversation_app.personality_routes import (
@@ -124,6 +125,7 @@ class LocalStream:
         self._settings_initialized = False
         self._asyncio_loop = None
         self._mic_muted = False  # mic starts live; the UI toggles it via the settings API
+        self._wake_gate: WakeWordGate | None = None  # built in record_loop to keep construction cheap
         self._backend_connection_state = "not_started"
         self._backend_error: str | None = None
         self._backend_retry_delay = BACKEND_RETRY_DELAY_SECONDS
@@ -861,15 +863,23 @@ class LocalStream:
                 break
 
     async def record_loop(self) -> None:
-        """Read mic frames from the recorder and forward them to the handler."""
+        """Read mic frames and forward them to the handler once the wake word gate is open."""
         input_sample_rate = self._robot.media.get_input_audio_samplerate()
         logger.debug(f"Audio recording started at {input_sample_rate} Hz")
+        if input_sample_rate != 16000:
+            # A wrong rate would leave the gate permanently closed: detection scores
+            # never cross the threshold, so no audio would ever reach the backend.
+            raise RuntimeError(f"Wake word model requires 16 kHz mic input, got {input_sample_rate} Hz")
+        self._wake_gate = WakeWordGate()
+        logger.info("Say 'hey jarvis' to start the conversation")
 
         while not self._stop_event.is_set():
             audio_frame = self._robot.media.get_audio_sample()
             if audio_frame is not None and not self._mic_muted:
-                await self.handler.receive((input_sample_rate, audio_frame))
-                self._emit_level("user", audio_frame)
+                movement_manager = self.handler.deps.movement_manager
+                if self._wake_gate.allows(audio_frame, self.seconds_since_activity(), movement_manager.is_idle()):
+                    await self.handler.receive((input_sample_rate, audio_frame))
+                    self._emit_level("user", audio_frame)
             await asyncio.sleep(0)  # avoid busy loop
 
     async def play_loop(self) -> None:
