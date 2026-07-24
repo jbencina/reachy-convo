@@ -6,7 +6,12 @@ import numpy as np
 import pytest
 
 from reachy_mini_conversation_app import wake_word
-from reachy_mini_conversation_app.wake_word import CHUNK_SAMPLES, REARM_SECONDS, WakeWordGate
+from reachy_mini_conversation_app.wake_word import (
+    CHUNK_SAMPLES,
+    REARM_SECONDS,
+    PHRASE_TAIL_SECONDS,
+    WakeWordGate,
+)
 
 
 class _StubModel:
@@ -70,16 +75,19 @@ def test_stereo_frames_use_first_channel_as_int16(stub_model: type[_StubModel]) 
     assert np.all(chunk == np.int16(0.5 * 32767))
 
 
-def test_detection_opens_gate_from_next_frame(stub_model: type[_StubModel], fake_clock: SimpleNamespace) -> None:
-    """The detecting frame is withheld; subsequent frames flow without detection."""
+def test_detection_withholds_phrase_tail_then_opens(stub_model: type[_StubModel], fake_clock: SimpleNamespace) -> None:
+    """The detecting frame and the wake phrase tail are withheld; later frames flow without detection."""
     gate = WakeWordGate()
     stub_model.score = 0.9
 
     assert gate.allows(_frame(CHUNK_SAMPLES), 0.0, True) is False
 
     stub_model.score = 0.0
+    assert gate.allows(_frame(CHUNK_SAMPLES), 0.0, True) is False  # tail of "hey jarvis" still sounding
+
+    fake_clock.now += PHRASE_TAIL_SECONDS
     assert gate.allows(_frame(CHUNK_SAMPLES), 0.0, True) is True
-    assert len(stub_model.instances[0].predict_calls) == 1  # no detection while awake
+    assert len(stub_model.instances[0].predict_calls) == 1  # no detection on the tail or while awake
 
 
 def test_awake_window_survives_stale_handler_clock(stub_model: type[_StubModel], fake_clock: SimpleNamespace) -> None:
@@ -88,6 +96,7 @@ def test_awake_window_survives_stale_handler_clock(stub_model: type[_StubModel],
     stub_model.score = 0.9
     gate.allows(_frame(CHUNK_SAMPLES), 0.0, True)
 
+    fake_clock.now += PHRASE_TAIL_SECONDS
     assert gate.allows(_frame(CHUNK_SAMPLES), 999.0, True) is True
 
 
@@ -105,6 +114,7 @@ def test_rearm_after_inactivity_rebuilds_model(stub_model: type[_StubModel], fak
     stub_model.score = 0.9
     gate.allows(_frame(CHUNK_SAMPLES), REARM_SECONDS + 2, True)
     stub_model.score = 0.0
+    fake_clock.now += PHRASE_TAIL_SECONDS
     assert gate.allows(_frame(CHUNK_SAMPLES), 0.0, True) is True
 
 

@@ -251,7 +251,7 @@ After the startup greeting, the app listens for the on-device wake word "hey jar
 How it works:
 
 - While the gate is armed, no audio leaves the robot. Mic frames are scored locally by the bundled `hey_jarvis` model; frames are only streamed to the realtime backend after a detection. Detection is fully on-device, so nothing is sent anywhere until you speak the wake word.
-- The "hey jarvis" utterance itself is not forwarded — streaming starts with the audio that follows it, so the backend never hears (or answers) the wake phrase.
+- The "hey jarvis" utterance itself is not forwarded. Detection can fire while the phrase is still sounding, so the gate also drops a short (0.5 s) tail window after it before streaming starts — the backend never hears (or answers) the wake phrase.
 - Once awake, the detector stops running entirely, so conversation latency is unaffected.
 - The gate re-arms after 60 seconds without conversation activity, but never while the robot is still speaking or moving. Saying the wake word always grants a full 60-second window, even if you pause before speaking.
 - On re-arm, the detector model is rebuilt from scratch: openWakeWord's `reset()` retains ~10 s of audio feature history, which could otherwise cause a stale trigger.
