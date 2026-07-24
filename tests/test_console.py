@@ -845,6 +845,19 @@ def _record_loop_stream(monkeypatch: pytest.MonkeyPatch) -> tuple[LocalStream, _
 
 
 @pytest.mark.asyncio
+async def test_record_loop_rejects_non_16khz_mic(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A mic rate other than 16 kHz must abort startup, not silently break detection."""
+    stream, fake_gate, handler = _record_loop_stream(monkeypatch)
+    stream._robot.media.get_input_audio_samplerate = lambda: 44100
+
+    with pytest.raises(RuntimeError, match="16 kHz"):
+        await stream.record_loop()
+
+    assert fake_gate.calls == 0
+    handler.receive.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_record_loop_withholds_frames_while_gated(monkeypatch: pytest.MonkeyPatch) -> None:
     """Mic frames must not reach the backend before the wake word is heard."""
     stream, fake_gate, handler = _record_loop_stream(monkeypatch)

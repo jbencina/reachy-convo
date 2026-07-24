@@ -867,7 +867,9 @@ class LocalStream:
         input_sample_rate = self._robot.media.get_input_audio_samplerate()
         logger.debug(f"Audio recording started at {input_sample_rate} Hz")
         if input_sample_rate != 16000:
-            logger.warning("Wake word model expects 16 kHz mic input, got %s Hz", input_sample_rate)
+            # A wrong rate would leave the gate permanently closed: detection scores
+            # never cross the threshold, so no audio would ever reach the backend.
+            raise RuntimeError(f"Wake word model requires 16 kHz mic input, got {input_sample_rate} Hz")
         self._wake_gate = WakeWordGate()
         logger.info("Say 'hey jarvis' to start the conversation")
 

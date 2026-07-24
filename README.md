@@ -244,7 +244,7 @@ How it works:
 - Once awake, the detector stops running entirely, so conversation latency is unaffected.
 - The gate re-arms after 60 seconds without conversation activity, but never while the robot is still speaking or moving. Saying the wake word always grants a full 60-second window, even if you pause before speaking.
 - On re-arm, the detector model is rebuilt from scratch: openWakeWord's `reset()` retains ~10 s of audio feature history, which could otherwise cause a stale trigger.
-- The mic must run at 16 kHz (openWakeWord's required rate); the app logs a warning at startup if it does not, since detection would silently fail.
+- The mic must run at 16 kHz (openWakeWord's required rate); the app refuses to start if it does not, since detection would otherwise silently fail and the robot would never wake.
 
 Implementation lives in `src/reachy_mini_conversation_app/wake_word.py` (`WakeWordGate`), hooked into the mic loop in `console.py`. The dependency is pinned to `openwakeword>=0.4.0,<0.5` because 0.4.x bundles the `hey_jarvis` ONNX model, while 0.5+ requires `tflite-runtime`.
 
